@@ -1,0 +1,2 @@
+WARNING mem0_mcp_server | MEM0_API_KEY is not set; Smithery health checks will pass, but every tool invocation will fail until a key is supplied via session config or env vars.
+INFO mem0_mcp_server | Starting Mem0 MCP server (default user=mem0-mcp)
