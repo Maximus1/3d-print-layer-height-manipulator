@@ -1,7 +1,54 @@
+# Python
 .venv/
 venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
 
-#Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Node
+node_modules/
+
+# Backups & Archives
+*.bak
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Local config
+cline_mcp_settings.json
+.cocoindex_code/
+
+# MCP server dev files
+mcp-server/
+mcp-server-filesystem/
+
+# GitHub instructions (AI rules)
+.github/instructions/
+
+# Logs
+*.log
+npm-debug.log*
