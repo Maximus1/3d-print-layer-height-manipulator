@@ -32,7 +32,7 @@ import os
 TARGET_HEIGHT = 0.1
 
 # Sicherheits-Z-Hop Hoehe fuer Travel Moves zwischen Konturen (in mm)
-# FIX LUECKEN: Konstanter Wert von 0.8mm anstatt dynamisch (Layer-Hoehe + Hop)
+# FIX: Konstanter Wert von 0.8mm anstatt dynamisch (Layer-Hoehe + Hop)
 # Dies verhindert inkonsistente Sicherheits-Lift-Hoehen zwischen Sub-Schichten
 SAFETY_HOP_HEIGHT = 0.8
 
@@ -137,6 +137,11 @@ def split_into_contours(lines, is_relative_e, start_e):
     current_extrusion = []
 
     in_extrusion = False
+    # NEU: Flag fuer Wipe-Erkennung (Bugfix #3):
+    # Nach einem Retract (G10/G1-E-Minus ohne XY) sind XY ohne E
+    # als Wipe-Bewegungen zu werten, NICHT als Travel.
+    # Wipe endet mit Unretract (G11/G1-E-Plus ohne XY).
+    awaiting_unretract = False
     last_e = start_e
 
     # Floating-Point-Toleranz
@@ -171,8 +176,9 @@ def split_into_contours(lines, is_relative_e, start_e):
         # Nur echte Druckbewegungen (G0 darf NIEMALS Drucken sein)
         is_print_move = bool(re.match(r'^G[123](?!\d)', s))
 
-        # Firmware Retract
+        # Firmware Retract / Unretract
         is_g10 = bool(re.match(r'^G10(?!\d)', s))
+        is_g11 = bool(re.match(r'^G11(?!\d)', s))
 
         has_e = 'E' in params
         e_val = params.get('E', 0.0)
@@ -226,33 +232,44 @@ def split_into_contours(lines, is_relative_e, start_e):
             e_delta > EPS
         )
 
-        # Echter Retract:
-        # G10 oder G1 E-Minus OHNE XY-Weg
+        # Echter Retract: G10 oder G1 E-Minus OHNE XY-Weg
         if is_g10:
-
             is_retract = True
-
         elif has_e:
-
             is_retract = (
                 e_delta < -EPS and
                 not has_xy_movement
             )
-
         else:
-
             is_retract = False
 
-        # Echter Travel:
-        # Bewegung mit XY aber OHNE E-Parameter
-        #
-        # E0 / konstante E-Werte bleiben bewusst
-        # Teil derselben Kontur.
+        # Echter Unretract: G11 oder G1 E-Plus OHNE XY-Weg
+        if is_g11:
+            is_unretract = True
+        elif has_e:
+            is_unretract = (
+                e_delta > EPS and
+                not has_xy_movement
+            )
+        else:
+            is_unretract = False
+
+        # Echter Travel: Bewegung mit XY aber OHNE E-Parameter
         is_travel = (
             is_move and
             has_xy_movement and
             not has_e
         )
+
+        # ------------------------------------------------------------
+        # WIPE-ERKENNUNG (Bugfix #3):
+        # awaiting_unretract signalisiert, dass ein Retract stattfand
+        # und nachfolgende XY-ohne-E als Wipe zu werten sind.
+        # ------------------------------------------------------------
+        if is_retract:
+            awaiting_unretract = True
+        if is_unretract:
+            awaiting_unretract = False
 
         # ------------------------------------------------------------
         # Zustandsmaschine
@@ -269,22 +286,26 @@ def split_into_contours(lines, is_relative_e, start_e):
 
             if is_retract:
 
-                # Retracts bleiben Teil der Kontur
-                current_extrusion.append(line)
-
-            elif is_travel:
-
-                # Echter Travel beendet Kontur sauber
+                # BUGFIX #6: G10/G1-E-Minus beendet die Kontur
+                # Bisher blieb G10 in current_extrusion, was is_travel
+                # als einzigen Konturtrenner erzwang.
+                # Jetzt beendet G10 die Kontur sauber – G1-ohne-E (Coasting)
+                # kann in extrusion_lines bleiben.
                 if current_extrusion:
-
                     contours.append((
                         list(current_travel),
                         list(current_extrusion)
                     ))
-
                 current_travel = [line]
                 current_extrusion = []
                 in_extrusion = False
+
+            elif is_travel:
+
+                # BUGFIX #6: G1 XY ohne E bleibt immer in extrusion_lines
+                # (Coasting, Wipe, F-Change). Nur G10/G1-E-Minus (Retract)
+                # beendet die Kontur. awaiting_unretract wird dadurch obsolet.
+                current_extrusion.append(line)
 
             else:
 
@@ -327,6 +348,8 @@ def split_into_contours(lines, is_relative_e, start_e):
         )
 
     return contours
+
+
 # =============================================================================
 # E-WERT SKALIERUNG
 # =============================================================================
@@ -451,6 +474,12 @@ def process_travel_lines(travel_lines, is_relative_e, e_state):
     """
     Verarbeitet Travel-Lines OHNE E-Skalierung.
     Aktualisiert den E-State korrekt fuer Retracts/Unretracts.
+
+    BUGFIX #3: Retracts/Unretracts in travel_lines sollten durch die
+    Wipe-Erkennung in split_into_contours gar nicht mehr vorkommen.
+    Sollten dennoch G1-E-Befehle hier landen, wird der E-State
+    mitgefuehrt aber E-Parameter aus den Zeilen entfernt (damit
+    waehrend XY-Travels nicht extrudiert wird).
     """
     result = []
     for line in travel_lines:
@@ -475,7 +504,9 @@ def process_travel_lines(travel_lines, is_relative_e, e_state):
                     # da der Drucker physikalisch dorthin faehrt
                     e_state['e'] = params['E']
                 # E-Parameter aus Travel-Zeilen entfernen, damit nicht
-                # waehrend XY-Travels extrudiert wird
+                # waehrend XY-Travels extrudiert wird.
+                # (Retracts/Unretracts werden durch die Wipe-Erkennung
+                # in split_into_contours korrekt behandelt)
                 line = re.sub(r'\s*(?<![A-Za-z])[Ee][-+]?\d*\.?\d+', '', line).rstrip() + '\n'
         result.append(line)
     return result
@@ -494,9 +525,7 @@ def generate_sublayer_gcode(outer_lines, layer_h, prev_z, current_z,
     am Startpunkt -> NUR Z-Wechsel zwischen Sub-Schichten, KEIN XY-Travel.
     Das verhindert das Zerreissen des Druckobjekts.
 
-    BEHEBUNG LUECKEN (Layer 370-375):
-    Bei relativer E-Koordinierung (M83) muss vor jedem Insel-Wechsel M204 S1
-    hinzugefuegt werden, um den relativen Extrusionsmodus zu initialisieren.
+    BUGFIX #4: E-State wird fuer jeden Sub-Layer neu initialisiert (auch bei M83).
     """
     # GUI-spezifische Hoehe bevorzugen, falls gesetzt (CLI nutzt weiterhin TARGET_HEIGHT)
     eff_target = GUI_TARGET_HEIGHT if GUI_TARGET_HEIGHT is not None else TARGET_HEIGHT
@@ -540,8 +569,10 @@ def generate_sublayer_gcode(outer_lines, layer_h, prev_z, current_z,
         is_first = sub_idx == 0
         is_last = sub_idx == num_sublayers - 1
 
-        # Bei absolutem E (M82) muss e_orig pro Pass zurueckgesetzt werden
-        if not is_relative_e:
+        # BUGFIX #4: E-State fuer jeden Sub-Layer neu initialisieren (auch bei M83)
+        if is_relative_e:
+            e_state = {'e': 0.0}
+        else:
             e_state['e_orig'] = start_e_val
             e_state['e'] = start_e_val
 
@@ -556,48 +587,122 @@ def generate_sublayer_gcode(outer_lines, layer_h, prev_z, current_z,
             if not extrusion_lines and not is_last and num_sublayers > 1:
                 continue
 
-            # === KRIITISCH FIX LUECKEN: Vor jedem Insel-Wechsel M204 S1 fuer relative E ===
-            # Wenn is_relative_e=True und c_idx>0 (nicht erste Kontur), M204 S1 hinzufuegen
-            # Dies initialisiert den relativen Extrusionsmodus und vermeidet E-Wert-Luecken
-            if is_relative_e and c_idx > 0:
-                result.append('M204 S1 ; Relative extrusion mode for island transition\n')
+            if is_first:
+                # === BUGFIX #2: M83 statt M204 S1 fuer Insel-Wechsel ===
+                # M83 stellt sicher, dass der relative E-Modus aktiv ist.
+                # (vorher fälschlich M204 S1, was Beschleunigung setzt, nicht den Extrusionsmodus)
+                if is_relative_e and c_idx > 0:
+                    result.append('M83 ; Relative extrusion mode for island transition\n')
 
-            # 1. XY-Anfahrt auf der Kontur
-            # Sicherheits-Lift auf Original-Z (current_z), um Kollisionen
-            # beim Insel-Wechsel zu vermeiden (nur bei tatsaechlichen Travel-Moves)
-            has_real_travel = False
-            for l in travel_lines:
-                su = l.strip().upper()
-                if su.startswith(('G0', 'G1', 'G2', 'G3')):
-                    p = parse_params(su)
-                    is_arc_t = su.startswith(('G2', 'G3'))
-                    if (any(k in p for k in 'XYIJR') if is_arc_t else ('X' in p or 'Y' in p)):
-                        has_real_travel = True
-                        break
+                # 1. XY-Anfahrt auf der Kontur
+                # Sicherheits-Lift auf Original-Z (current_z), um Kollisionen
+                # beim Insel-Wechsel zu vermeiden (nur bei tatsaechlichen Travel-Moves)
+                has_real_travel = False
+                for l in travel_lines:
+                    su = l.strip().upper()
+                    if su.startswith(('G0', 'G1', 'G2', 'G3')):
+                        p = parse_params(su)
+                        is_arc_t = su.startswith(('G2', 'G3'))
+                        if (any(k in p for k in 'XYIJR') if is_arc_t else ('X' in p or 'Y' in p)):
+                            has_real_travel = True
+                            break
 
-            if has_real_travel:
-                safe_z = current_z + SAFETY_HOP_HEIGHT
-                # Aktuelle Feedrate fuer den Sicherheitslift verwenden (nicht hardcodiert F3000)
-                # Der Lift erfolgt VOR den Travel-Moves, daher state_f als Basis
-                result.append(f'G1 Z{safe_z:.5f} F{state_f:.0f} ; Sicherheits-Lift auf Original-Z\n')
+                if has_real_travel:
+                    safe_z = current_z + SAFETY_HOP_HEIGHT
+                    # Aktuelle Feedrate fuer den Sicherheitslift verwenden (nicht hardcodiert F3000)
+                    # Der Lift erfolgt VOR den Travel-Moves, daher state_f als Basis
+                    result.append(f'G1 Z{safe_z:.5f} F{state_f:.0f} ; Sicherheits-Lift auf Original-Z\n')
 
-            # Travel-Lines verarbeiten (mit E-State-Tracking aber ohne Skalierung)
-            processed_travel = process_travel_lines(
-                remove_z_from_lines(travel_lines),
-                is_relative_e, e_state
-            )
-            # Merke die aktuellste Feedrate aus den Travel-Moves
-            for tl in processed_travel:
-                tp = parse_params(tl)
-                if 'F' in tp:
-                    current_f = tp['F']
-            result.extend(processed_travel)
+                # Travel-Lines verarbeiten (mit E-State-Tracking aber ohne Skalierung)
+                processed_travel = process_travel_lines(
+                    remove_z_from_lines(travel_lines),
+                    is_relative_e, e_state
+                )
+                # Merke die aktuellste Feedrate aus den Travel-Moves
+                for tl in processed_travel:
+                    tp = parse_params(tl)
+                    if 'F' in tp:
+                        current_f = tp['F']
 
-            # 2. Erst jetzt auf die exakte Z-Hoehe des Sub-Layers absenken
-            # Feedrate in den Z-Move integrieren (spart eine Zeile)
-            result.append(f'G1 Z{sub_z:.5f} F{current_f:.0f} ; Sub-Layer Z-Hoehe & Feedrate\n')
+                # G11 (Unretract) aus Travels extrahieren - muss NACH Z-Absenkung erfolgen
+                # BUGFIX B: Nur EIN G11 am Ende behalten (keine Duplikate)
+                travels_without_g11 = []
+                pending_g11 = []
+                for tl in processed_travel:
+                    if tl.strip().upper().startswith('G11'):
+                        pending_g11.append(tl)
+                    else:
+                        travels_without_g11.append(tl)
+                if len(pending_g11) > 1:
+                    pending_g11 = [pending_g11[-1]]  # Nur letztes G11
 
-            # 3. Wand drucken mit skaliertem E
+                # Travels OHNE G11 ausgeben (G10 Retracts bleiben vor dem Travel)
+                result.extend(travels_without_g11)
+
+                # 2. Erst jetzt auf die exakte Z-Hoehe des Sub-Layers absenken
+                # Feedrate in den Z-Move integrieren (spart eine Zeile)
+                result.append(f'G1 Z{sub_z:.5f} F{current_f:.0f} ; Sub-Layer Z-Hoehe & Feedrate\n')
+
+                # G11 erst NACH der Z-Absenkung, damit Unretract auf korrekter Hoehe erfolgt
+                result.extend(pending_g11)
+
+            else:
+                # BUGFIX #5 revidiert: Sub-Schicht > 1
+                # c_idx == 0: Duese ist am Startpunkt der ERSTEN Kontur
+                #   -> Z-Wechsel + XY-Travel aus travel_lines beibehalten
+                # c_idx > 0: Inselwechsel - XY-Travel aus travel_lines beibehalten
+                if c_idx == 0:
+                    # XY-Anfahrweg aus travel_lines extrahieren (erste Zeile mit X/Y vor G10)
+                    approach_found = False
+                    for l in travel_lines:
+                        su = l.strip().upper()
+                        if su.startswith(('G0', 'G1')):
+                            p = parse_params(su)
+                            if ('X' in p or 'Y' in p) and 'Z' not in p:
+                                # Reine XY-Positionierung ohne Z - uebernehmen
+                                result.append(f'{l.rstrip()}\n')
+                                approach_found = True
+                                break
+                            elif ('X' in p or 'Y' in p):
+                                # XY + Z - Z entfernen
+                                line_no_z = re.sub(r'\s*Z[-+]?\d*\.?\d+', '', l).rstrip() + '\n'
+                                result.append(line_no_z)
+                                approach_found = True
+                                break
+                    if not approach_found:
+                        # Fallback: nur Z-Wechsel
+                        result.append(f'G0 Z{sub_z:.5f} F{current_f:.0f} ; Sub-Layer Z-Hoehe\n')
+                    else:
+                        # Z-Wechsel NACH XY-Positionierung
+                        result.append(f'G0 Z{sub_z:.5f} F{current_f:.0f} ; Sub-Layer Z-Hoehe\n')
+                else:
+                    # Travel-Lines fuer Inselwechsel verarbeiten (wie is_first, aber ohne Sicherheitslift)
+                    processed_travel = process_travel_lines(
+                        remove_z_from_lines(travel_lines),
+                        is_relative_e, e_state
+                    )
+                    # G11 aus Travels extrahieren - muss NACH Z-Absenkung erfolgen
+                    # BUGFIX B: Nur EIN G11 am Ende behalten (keine Duplikate)
+                    travels_without_g11 = []
+                    pending_g11 = []
+                    for tl in processed_travel:
+                        if tl.strip().upper().startswith('G11'):
+                            pending_g11.append(tl)
+                        else:
+                            travels_without_g11.append(tl)
+                    if len(pending_g11) > 1:
+                        pending_g11 = [pending_g11[-1]]  # Nur letztes G11
+                    # M83 vor Inselwechsel
+                    if is_relative_e:
+                        result.append('M83 ; Relative extrusion mode for island transition\n')
+                    # Travels OHNE G11 ausgeben (G1 XY, G10)
+                    result.extend(travels_without_g11)
+                    # Z auf Sub-Layer Hoehe (XY bereits positioniert)
+                    result.append(f'G0 Z{sub_z:.5f} ; Sub-Layer Z-Hoehe nach Insel-Wechsel\n')
+                    # G11 nach Z-Absenkung
+                    result.extend(pending_g11)
+
+            # 3. Wand drucken mit skaliertem E (immer)
             scaled = scale_extrusion_lines(
                 remove_z_from_lines(extrusion_lines),
                 e_factor, is_relative_e, e_state, actual_sh=actual_sh,
@@ -725,8 +830,18 @@ def process_gcode(lines):
         result.extend(sub_lines)
         outer_buffer = []
 
-    for line in lines:
+    for i, line in enumerate(lines):
         if is_outer_wall_comment(line):
+            # BUGFIX #7: Idempotenz – bereits sublayerte Bloecke ueberspringen
+            # Pruefe, ob die naechsten Zeilen einen ; [SubLayer] Marker enthalten
+            already_sublayered = False
+            for j in range(i + 1, min(i + 5, len(lines))):
+                if lines[j].strip().startswith('; [SubLayer]'):
+                    already_sublayered = True
+                    break
+            if already_sublayered:
+                result.append(line)
+                continue
             if in_outer:
                 flush()
             in_outer = True
@@ -774,7 +889,7 @@ def main():
 
     print(f"[SubLayer] Verarbeite: {filepath}")
     print(f"[SubLayer] Ziel-Perimeter-Schichthoehe: {TARGET_HEIGHT}mm")
-    print("[SubLayer] FIX aktiviert: M204 S1 vor Insel-Wechseln (behebt Layer-Luecken)")
+    print("[SubLayer] Bugfixes aktiv: M83 (statt M204 S1), Wipe-Erkennung, E-Reset, E-State in Travels")
 
     # Backup der Originaldatei erstellen
     backup_path = filepath + '.bak'
