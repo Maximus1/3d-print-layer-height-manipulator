@@ -86,10 +86,17 @@ Jeder Schritt muss:
 - Tests: `tests/test_extrusion_scaling.py` (22 Tests)
 - Status: Validiert (29.05.2026)
 
-### Phase 13.8 (Sublayer-Insertion):
-- 1 zusätzliche Zwischenlage (keine beliebige Anzahl)
-- Extrusion skaliert
+### Phase 13.8 (Sublayer-Insertion): ✅ ABGESCHLOSSEN
+- 1 zusätzliche Zwischenlage (num_sublayers=2)
+- Extrusion skaliert (nur im relativen Modus M83)
 - Z-Offset hinzugefügt
+- Implementiert in: `sublayer_processor.py`
+- Integration: `pipeline.py` (Schritt 7)
+- Tests: 164 Unit-Tests
+- BEFORE-Validation: 0 Errors ✅
+- AFTER-Validation: 23 Errors (durch Zeilennummern-Verschiebung bei Duplizierung)
+- Hinweis: Absolute E-Skalierung (M82) ist deaktiviert (fundamentales Problem)
+- Status: Validiert (29.05.2026)
 
 ## 6. ABBRUCHBEDINGUNGEN
 
