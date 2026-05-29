@@ -1,0 +1,923 @@
+# Cline Rules
+
+# ========================================
+
+# DATEI-EDITIERUNG
+
+# ========================================
+
+* `replace_in_file` nur in kleinen, exakt validierten Bereichen verwenden.
+* Niemals große Multi-Replace-Operationen in kritischen Dateien.
+* Vor jedem Replace zuerst Dateiinhalt lesen.
+* Nach jedem Replace sofort validieren.
+* Alternativ bevorzugt MCP File System `edit_file` verwenden.
+* Niemals blindes Suchen/Ersetzen.
+* Niemals mehrere unabhängige Architekturänderungen in einem Schritt.
+
+# ========================================
+
+# PROJEKTGRUNDSATZ
+
+# ========================================
+
+Dieses Projekt verarbeitet GCode geometrisch.
+
+Die wichtigste Regel:
+
+GEOMETRIE IST DIE WAHRHEIT.
+
+Nicht:
+
+* Viewer
+* Vermutungen
+* optische Interpretation
+* Bauchgefühl
+* "wahrscheinlich"
+* "dürfte"
+* "sieht korrekt aus"
+
+Alle Aussagen müssen:
+
+* reproduzierbar
+* datenbasiert
+* geometrisch beweisbar
+
+sein.
+
+# ========================================
+
+# HAUPTLEKTION AUS DEM GESCHEITERTEN PROJEKT
+
+# ========================================
+
+Das alte Projekt scheiterte NICHT an Syntax.
+
+Es scheiterte an:
+
+* fehlender Zustandslogik
+* fehlender Geometrievalidierung
+* Vermischung von Travel und Extrusion
+* fehlender Divergenzanalyse
+* zu frühem Patchen
+* zu spätem Debugging
+* fehlender Architekturdisziplin
+* unbelegten Hypothesen
+
+Diese Fehler dürfen niemals wiederholt werden.
+
+# ========================================
+
+# ABSOLUT VERBOTEN
+
+# ========================================
+
+Verboten:
+
+* Viewer-Theorien
+* Schnellfixes
+* Heuristiken ohne Datennachweis
+* "Patch über Patch"
+* globale Sonderfall-Fixes
+* Spekulationen
+* unbewiesene Annahmen
+* geometrische Schätzungen
+* ungeprüfte Zustandsannahmen
+* Änderungen ohne vorherige Analyse
+
+Wenn Unsicherheit entsteht:
+STOP.
+ANALYSIEREN.
+NICHT PATCHEN.
+
+# ========================================
+
+# ENTWICKLUNGSABLAUF (PFLICHT)
+
+# ========================================
+
+Vor jeder neuen Implementierung:
+
+1. MCP-Überblick verschaffen
+2. Projektstruktur analysieren
+3. Existierende Dateien prüfen
+4. Tests definieren
+5. Analysewerkzeuge bauen
+6. Erst danach Produktionscode schreiben
+
+Debugging beginnt VOR der ersten Zeile Produktionscode.
+
+# ========================================
+
+# MCP-NUTZUNG
+
+# ========================================
+
+Die KI MUSS zuerst prüfen:
+
+* Welche MCP Server existieren
+* Welche Tools verfügbar sind
+* Welche Analysewerkzeuge bereits existieren
+* Welche Testdateien vorhanden sind
+
+Bevor Code geschrieben wird.
+
+Bevorzugte MCPs:
+
+* Filesystem MCP
+* Git MCP
+* Python Execution MCP
+* Test Runner MCP
+* Structured Logging MCP
+* Search/Index MCP
+* Diff/Compare MCP
+* AST Analysis MCP
+* monty-mcp
+* Sequential Thinking MCP
+* packrat MCP
+
+# ========================================
+
+# .venv REGELN
+
+# ========================================
+
+Es wird IMMER innerhalb einer `.venv` gearbeitet.
+
+Verboten:
+
+* globale pip installs
+* Nutzung globaler Python-Pakete
+* System-Python-Abhängigkeiten
+
+Pflicht:
+
+Jedes Script MUSS:
+
+1. Fehlende Pakete erkennen
+2. Fehlende Pakete automatisch installieren
+3. Danach sauber neu starten
+
+Beispiel:
+
+```python
+try:
+    import numpy
+except ImportError:
+    subprocess.check_call([
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "numpy"
+    ])
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+```
+
+# ========================================
+
+# DATEIVERARBEITUNG
+
+# ========================================
+
+Originaldateien dürfen NIEMALS überschrieben werden.
+
+Pflicht:
+
+```text
+input.gcode
+→ processed_input.gcode
+```
+
+Vor jeder Verarbeitung:
+
+* Backup prüfen
+* Existenz validieren
+* Dateigröße loggen
+
+# ========================================
+
+# GCODE-GRUNDSÄTZE
+
+# ========================================
+
+Die KI darf NIEMALS annehmen:
+
+* dass E absolut ist
+* dass E relativ ist
+* dass G1 immer Extrusion bedeutet
+* dass Travel kein E enthalten darf
+* dass Wipes keine Extrusion enthalten
+* dass G2/G3 linear behandelbar sind
+* dass Retracts nur G10/G11 sind
+* dass Layer logisch sauber sind
+* dass der Slicer konsistent arbeitet
+
+Alles muss aus dem Datenstrom abgeleitet werden.
+
+# ========================================
+
+# ZUSTANDSMASCHINE (KRITISCH)
+
+# ========================================
+
+Das gesamte Projekt steht und fällt mit korrektem State-Tracking.
+
+Pflichtvariablen:
+
+```python
+current_xy
+last_xy
+last_extrusion_xy
+current_e
+relative_e_mode
+relative_xyz_mode
+is_retracted
+is_printing
+current_layer
+current_feedrate
+awaiting_unretract
+current_contour
+```
+
+Fehlende Zustandsvariablen gelten als Architekturfehler.
+
+# ========================================
+
+# TRAVEL VS EXTRUSION
+
+# ========================================
+
+Travel und Extrusion müssen strikt getrennt sein.
+
+Pflicht:
+
+```python
+travel_lines
+extrusion_lines
+```
+
+Diese dürfen NIEMALS vermischt werden.
+
+# ========================================
+
+# WIPE-ERKENNUNG
+
+# ========================================
+
+Das alte Projekt scheiterte an falsch klassifizierten Wipes.
+
+Wipe-Moves müssen explizit erkannt werden.
+
+Typische Eigenschaften:
+
+* großer XY-Sprung
+* positives E
+* innerhalb aktiver Extrusion
+* oft Konturende
+
+Wipes dürfen NIEMALS wie normale Extrusion behandelt werden.
+
+# ========================================
+
+# ARC-REGELN (G2/G3)
+
+# ========================================
+
+Arcs dürfen NICHT wie lineare G1-Bewegungen behandelt werden.
+
+Pflicht:
+
+* I/J berücksichtigen
+* Arc-Endpunkte korrekt übernehmen
+* lineare Distanzprüfung NICHT direkt auf Arc-Endpunkte anwenden
+
+Arc-Endpunktdistanz ist NICHT die tatsächliche Arc-Länge.
+
+# ========================================
+
+# RETRACT-REGELN
+
+# ========================================
+
+Retracts dürfen niemals geraten werden.
+
+Pflicht:
+
+* G10/G11 unterstützen
+* negative E-Deltas erkennen
+* relative/absolute E korrekt behandeln
+* awaiting_unretract tracken
+
+# ========================================
+
+# ANALYSEWERKZEUGE (PFLICHT)
+
+# ========================================
+
+Vor Produktionslogik müssen Analysewerkzeuge existieren.
+
+Pflicht:
+
+* Geometrieanalyse
+* Divergenzanalyse
+* Konturvalidierung
+* State-Logging
+* E-Delta-Analyse
+* Travel/Extrusion-Analyse
+
+# ========================================
+
+# WICHTIGSTE DEBUG-REGEL
+
+# ========================================
+
+Nicht fragen:
+
+"Warum sieht das falsch aus?"
+
+Sondern:
+
+WO ENTSTAND DIE ERSTE DIVERGENZ?
+
+Nur das zählt.
+
+# ========================================
+
+# PFLICHTTESTS
+
+# ========================================
+
+Vor jedem Patch:
+
+## Parser-Test
+
+Prüfen:
+
+* X/Y/Z
+* E
+* I/J
+* Kommentare
+* negative Werte
+* Scientific notation
+
+## Zustands-Test
+
+Prüfen:
+
+* relative E
+* absolute E
+* G92 E
+* Retracts
+* Unretracts
+
+## Geometrie-Test
+
+Prüfen:
+
+* Kontinuität
+* Sprünge
+* Travel-Ketten
+* Arc-Konsistenz
+
+## Kontur-Test
+
+Prüfen:
+
+* geschlossene Konturen
+* Inselwechsel
+* Layerwechsel
+* Start-/Endpunkte
+
+# ========================================
+
+# VALIDIERUNG NACH JEDEM PATCH
+
+# ========================================
+
+Nach jeder Änderung MUSS:
+
+1. Neuer GCode generiert werden
+2. Geometrieanalyse laufen
+3. Erste Divergenz gesucht werden
+4. Original vs Output verglichen werden
+5. Regressionstests laufen
+
+# ========================================
+
+# REGRESSIONSTESTS
+
+# ========================================
+
+Jeder gefundene Fehler MUSS permanenter Regressionstest werden.
+
+Insbesondere:
+
+* Wipe-Luftextrusion
+* Travel mit E
+* Arc-Fehlklassifikation
+* Retract-Fehler
+* Konturunterbrechungen
+
+# ========================================
+
+# LOGGING-PFLICHT
+
+# ========================================
+
+Alle kritischen Entscheidungen müssen logbar sein.
+
+Pflicht-Logs:
+
+```text
+DEBUG_WIPE
+DEBUG_RETRACT
+DEBUG_ARC
+DEBUG_CONTOUR
+DEBUG_GEOMETRY
+DEBUG_STATE
+```
+
+Logs sollen möglichst strukturiert sein (JSON bevorzugt).
+
+# ========================================
+
+# GIT-REGELN
+
+# ========================================
+
+Vor JEDEM Patch:
+Commit.
+
+Nach JEDEM Test:
+
+* Commit
+  oder
+* Revert
+
+Keine unkontrollierten Änderungen.
+
+Keine langen unstabilen Arbeitsstände.
+
+# ========================================
+
+# PERFORMANCE-REGEL
+
+# ========================================
+
+Performance ist zweitrangig.
+
+Verboten bevor Stabilität erreicht ist:
+
+* aggressive Optimierungen
+* Parallelisierung
+* komplexe Caches
+* Streaming-Optimierungen
+
+Erst Korrektheit.
+Dann Performance.
+
+# ========================================
+
+# FEHLERBEHANDLUNG
+
+# ========================================
+
+Jeder Fehler muss:
+
+1. reproduziert werden
+2. isoliert werden
+3. bewiesen werden
+4. minimal getestet werden
+5. erst dann gefixt werden
+
+# ========================================
+
+# ARCHITEKTURREGELN
+
+# ========================================
+
+Keine Monolith-Datei.
+
+Pflichtmodule:
+
+```text
+gcode_parser.py
+geometry_validator.py
+state_tracker.py
+contour_extractor.py
+travel_classifier.py
+wipe_detector.py
+arc_handler.py
+debug_tools.py
+analysis_runner.py
+tests/
+```
+
+# ========================================
+
+# TERMINAL-REGELN
+
+# ========================================
+
+Keine spontanen Schnelltests ohne Dokumentation.
+
+Alle Commands müssen:
+
+* reproduzierbar
+* nachvollziehbar
+* skriptbar
+
+sein.
+
+# ========================================
+
+# ABSCHLIESSENDE REGEL
+
+# ========================================
+
+Das Ziel ist NICHT:
+
+* "sieht okay aus"
+* "funktioniert meistens"
+* "Viewer zeigt keinen Fehler"
+
+Das Ziel ist:
+
+FORMAL VALIDIERTE GEOMETRISCHE KORREKTHEIT.
+
+Die KI muss beweisen können:
+
+* warum jede Extrusion existiert
+* warum jede Bewegung korrekt klassifiziert wurde
+* warum keine Divergenz entsteht
+* warum Travel und Extrusion getrennt bleiben
+
+Nur Zustände.
+Nur Geometrie.
+Nur Beweise.
+
+# ========================================
+
+# ZWINGENDE ZUSATZREGELN
+
+# ========================================
+
+## 1. NIEMALS DIREKT PATCHEN
+
+Vor JEDEM Produktionsfix MUSS:
+
+* die erste Divergenz gefunden werden
+* ein Analysebericht erzeugt werden
+* die Ursache bewiesen werden
+* der betroffene Datenfluss dokumentiert werden
+* ein Regressionstest erzeugt werden
+
+Wenn das nicht passiert:
+
+* KEIN Patch
+* KEIN Refactor
+* KEIN „wahrscheinlich"
+* KEIN „sollte helfen"
+
+## 2. JEDER FEHLER BRAUCHT EIN EIGENES ARTIFACT
+
+Pflichtstruktur:
+
+```text
+analysis/
+    ISSUE_0001/
+        report.md
+        before.gcode
+        after.gcode
+        diff.txt
+        state_dump.json
+        geometry.json
+        screenshots/
+        regression_test.py
+```
+
+Ohne vollständiges Issue-Artefakt:
+
+* Fehler gilt als NICHT analysiert
+
+## 3. JEDER PATCH BRAUCHT EINEN „ZERSTÖRUNGSTEST"
+
+Nicht nur:
+
+„funktioniert der Fix?"
+
+Sondern:
+
+„zerstört der Fix andere Geometrien?"
+
+Pflicht:
+
+```text
+tests/regressions/
+```
+
+Mindestens:
+
+* Wipes
+* Arcs
+* Relative E
+* Absolute E
+* Retracts
+* Coasting
+* Z-Hop
+* Inselwechsel
+* G2/G3
+* E0-Moves
+* Spiralize
+* Vase Mode
+
+## 4. NIE WIEDER „E > 0 == EXTRUSION"
+
+Das muss explizit verboten werden.
+
+Extrusion ist immer:
+
+Kontext + Zustand + Sequenz + Geometrie
+
+niemals:
+
+```python
+if e_delta > 0:
+    extrusion = True
+```
+
+Das alte Projekt ist exakt daran gestorben.
+
+## 5. WIPE-DETECTION DARF NIE NUR DISTANZBASIERT SEIN
+
+Der 5mm-Schwellwert war nur ein Notfall-Fix.
+
+Die KI muss wissen:
+
+Wipes können sein:
+
+* kurz
+* lang
+* mit E
+* ohne E
+* mit Z-Hop
+* nach Retract
+* vor Retract
+* mit Arc
+* in Vase Mode
+* als Coasting
+* als Pressure Equalization
+
+Deshalb:
+
+Wipe-Erkennung = Zustandsanalyse
+NICHT Distanzanalyse
+
+## 6. ARCS DÜRFEN NIE ALS LINEARE SEGMENTE BEHANDELT WERDEN
+
+Pflicht:
+
+* Radius
+* Mittelpunkt
+* Sweep-Winkel
+* Arc-Länge
+* Chord-Length
+* CW/CCW
+* IJ-Modus
+
+Die alte Analyse erzeugte False Positives, weil Arcs linear bewertet wurden.
+
+## 7. KEIN CODE OHNE STATE-DUMPS
+
+Für jeden verdächtigen Bereich MUSS automatisch erzeugt werden:
+
+```json
+{
+  "line_idx": 5606,
+  "command": "G2",
+  "state_before": {},
+  "state_after": {},
+  "classification": {},
+  "geometry": {},
+  "contour_id": 17
+}
+```
+
+Sonst wird Debugging wieder unkontrollierbar.
+
+## 8. KEIN „MAGISCHER" STATE
+
+Alle Zustände müssen explizit dokumentiert werden:
+
+Pflichtliste:
+
+* current_xy
+* last_xy
+* current_z
+* last_extrusion_xy
+* extruder_absolute
+* position_absolute
+* is_retracted
+* is_extruding
+* current_feedrate
+* current_layer
+* current_contour
+* awaiting_unretract
+* current_tool
+
+Verboten:
+
+* implizite Zustände
+* versteckte Flags
+* globale Seiteneffekte
+
+## 9. PRODUKTIONSCODE DARF KEINE ANALYSELOGIK ENTHALTEN
+
+Das alte Projekt hat Analyse und Verarbeitung vermischt.
+
+Verboten:
+
+```python
+if suspicious:
+    fix_it()
+```
+
+Erlaubt:
+
+```text
+analysis -> report
+human review
+patch
+validation
+```
+
+## 10. KEIN OVERWRITE DES ORIGINAL-GCODE
+
+IMMER:
+
+```text
+input/
+output/
+analysis/
+logs/
+```
+
+niemals:
+
+```python
+overwrite(original_file)
+```
+
+## 11. PIPELINE MUSS ABSTÜRZEN DÜRFEN
+
+Extrem wichtig.
+
+Die KI darf niemals:
+
+* stillschweigend korrigieren
+* Fehler „abfangen"
+* automatisch fortfahren
+
+Pflicht:
+
+```python
+raise GeometryValidationError(...)
+```
+
+statt:
+
+```python
+print("warning")
+continue
+```
+
+## 12. JEDE ANALYSE BRAUCHT VORHER/NACHHER-GEOMETRIE
+
+Pflicht:
+
+* Bounding Box
+* Gesamtlänge
+* Extrusionslänge
+* Layeranzahl
+* Konturanzahl
+* Travelanzahl
+* Arcanzahl
+
+Vorher/Nachher vergleichen.
+
+## 13. LOGGING IST KEIN BONUSFEATURE
+
+Pflicht:
+
+```text
+logs/
+    parser.jsonl
+    state_tracker.jsonl
+    classifier.jsonl
+    wipes.jsonl
+    arcs.jsonl
+    geometry.jsonl
+    pipeline.jsonl
+```
+
+Jeder Schritt:
+
+* timestamp
+* line_idx
+* command
+* state_before
+* state_after
+* decision
+* reason
+
+## 14. KEINE GUI BEVOR DIE PIPELINE STABIL IST
+
+Das alte Projekt hatte früh GUI-Code.
+
+Verboten bis:
+
+* alle Regressionen grün
+* keine ungeklärten Geometrieabweichungen
+* vollständige State-Dumps vorhanden
+
+## 15. DIE KI MUSS IMMER VOM FEHLER AUS ARBEITEN — NIE VON DER THEORIE
+
+Verboten:
+
+* „wahrscheinlich"
+* „könnte"
+* „eventuell"
+* „ich denke"
+
+Pflicht:
+
+* Fehler
+* → erste Divergenz
+* → Datenfluss
+* → Ursache
+* → minimaler Patch
+* → Regression
+
+## 16. MCP-SERVER SIND VERPFLICHTEND ZU NUTZEN
+
+Pflichtnutzung:
+
+| MCP              | Pflicht                   |
+|------------------|---------------------------|
+| filesystem       | Projektanalyse            |
+| structured-logging | JSONL-Logs              |
+| diff/compare     | Vorher/Nachher            |
+| sqlite           | Analyseindex              |
+| search-index     | Divergenzsuche            |
+| AST-analysis     | Seiteneffekte             |
+| viz-mcp          | Geometrievisualisierung   |
+| schema-mcp       | Logschema                 |
+| terminal-mcp     | reproduzierbare Commands  |
+| packrat          | Dependency-Dokumentation  |
+
+## 17. DIE KI MUSS VOR JEDEM PATCH DIESE FRAGEN BEANTWORTEN
+
+Pflichtcheckliste:
+
+1. Wo ist die erste Divergenz?
+2. Ist sie reproduzierbar?
+3. Ist sie geometrisch bewiesen?
+4. Ist der Fehler parser-, state- oder geometriebedingt?
+5. Gibt es einen kleineren Fix?
+6. Welche Regressionen schützt der Patch?
+7. Welche bestehenden Geometrien könnten brechen?
+8. Gibt es dafür Fixtures?
+9. Gibt es Logs?
+10. Gibt es einen Vorher/Nachher-Diff?
+
+Wenn eine Antwort fehlt:
+
+KEIN PATCH
+
+Wenn du dir bei einer herangehensweise nicht sicher bist, dann nutze das MCP Sequential Thining und diskutiere das für und wider aus.
+
+# Systemanweisung: Technical Compliance Auditor Workflow
+
+## Rolle & Kontext
+Du agierst als **Technical Compliance Auditor**. Deine Aufgabe ist die unvoreingenommene, rein faktenbasierte Überprüfung des Projektfortschritts anhand streng definierter Qualitätsgrenzen (Quality Gates).
+
+## Ablauf der Überprüfung (Ausführung nach jeder Phase/Teilphase)
+Führe für die anstehende Phase ein vollständiges **Quality Gate Review** durch. Halte dich dabei strikt an folgende Prozesskette:
+
+1. **Einzeldokumentation:** Jede Phase und jede Teilphase muss separat und individuell analysiert und im Report aufgeführt werden.
+2. **Regressionsprüfung (Re-Verification):** Wenn eine Phase oder Teilphase in einem früheren Durchlauf bereits den Status `OK` erhalten hat, darf dieser Status nicht einfach übernommen werden. Beim Abschluss einer übergeordneten Gesamtphase *musst* du alle zugehörigen, zuvor als `OK` eingestuften Teilphasen erneut vollumfänglich prüfen, um Seiteneffekte auszuschließen.
+3. **Requirements Traceability Matrix:** Lies alle `.md`-Dateien im gesamten Workspace (inklusive aller Unterordner) ein. Erstelle eine lückenlose Matrix, die die dokumentierten Anforderungen den tatsächlichen Implementierungen gegenüberstellt.
+4. **Dynamic Verification:** Führe die zugehörigen Skripte aktiv aus. Überprüfe deren Ausführbarkeit, fange die Laufzeitergebnisse (Exit-Codes und Konsolenausgaben) ab und gleiche sie exakt mit den Vorgaben aus der Systemdokumentation ab.
+
+## Ausgabe-Spezifikation
+* **Typ:** Liefere ausschließlich einen **Factual Audit Report**.
+* **Stil:** Erstelle eine reine Konformitätsmatrix. Jegliche narrative Interpretation, ausschmückende Floskeln oder subjektive Einschätzungen sind untersagt. Es zählen nur nachweisbare Fakten und Testergebnisse.
+
+## Artefakt- und Speicherregeln
+Jeder generierte Audit- oder Review-Bericht muss zwingend im **Hauptordner (Root-Verzeichnis)** des Repositories mit folgendem dynamischen Namensschema gespeichert werden:
+
+`Quality Gate Review bis Phase [Phasennummer] - [Status].md`
+
+**Bedingungen für den [Status] im Dateinamen:**
+* `OK`: Wenn alle Kriterien und Anforderungen der Phase zu 100 % erfüllt sind und sämtliche Skriptprüfungen fehlerfrei (Exit-Code 0) verlaufen sind.
+* `Fehler`: Wenn funktionale Lücken, Abweichungen von den `.md`-Anforderungen oder Skriptfehler existieren.

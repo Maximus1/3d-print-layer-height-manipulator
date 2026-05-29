@@ -1,0 +1,1177 @@
+# EverOS — Full Reference
+
+> EverOS is the Memory Operating System for Agentic AI. It gives LLM agents persistent, structured memory that extracts knowledge from conversations and multimodal data, resolves contradictions, and retrieves context intelligently — so agents remember, learn, and evolve across sessions.
+
+For a concise overview, see llms.txt in the same directory.
+
+Docs: https://docs.evermind.ai
+Dashboard & API keys: https://everos.evermind.ai
+GitHub (open source): https://github.com/EverMind-AI/EverOS
+Python SDK: pip install everos
+API base URL: https://api.evermind.ai
+Auth: Bearer token in Authorization header
+Contact: contact@evermind.ai | Discord: https://discord.gg/geHdX4F24B
+Research paper: https://arxiv.org/pdf/2601.02163
+
+For the TL;DR, recommended agent loop, and "when to use" guidance, see llms.txt.
+
+## Table of Contents
+
+- Core Concepts
+  - Memory Lifecycle
+  - MemCell
+  - MemScene
+  - Memory Types
+  - Scenario Modes
+  - Reconstructive Recollection
+- API Reference (v1)
+  - Authentication
+  - Memories: Add, Flush, Get, Search, Delete
+  - Groups
+  - Senders
+  - Tasks
+  - Storage (Multimodal Upload)
+  - Settings
+  - Filters DSL
+  - Error Handling
+- Retrieval Methods
+  - Keyword, Vector, Hybrid, Agentic
+  - Choosing a Method
+  - Agentic Retrieval Deep Dive
+- Multimodal Memory
+- Foresight Memory
+- Python SDK
+  - Sync Client
+  - Async Client
+  - Group Memories
+  - Agent Memories
+- Cookbook Patterns
+  - Personal Assistant
+  - Team Collaboration
+  - Customer Support
+  - AI Tutor
+  - Batch Processing
+- Open Source Deployment
+- EverOS vs Standard RAG
+- Benchmarks & FAQ
+
+---
+
+## Core Concepts
+
+### Memory Lifecycle
+
+EverOS reimagines memory as a dynamic, living lifecycle inspired by biological engram formation:
+
+1. **Episodic Trace Formation (Encoding)** — The system monitors dialogue streams and uses semantic boundary detection to segment interactions into coherent events. Instead of storing raw logs, it creates discrete MemCells — like remembering a "dinner party" as a distinct event rather than a second-by-second transcript.
+
+2. **Semantic Consolidation (Storage)** — In the background, the system analyzes new MemCells, links them to existing knowledge, updates the User Profile, and clusters related memories into MemScenes. This transforms transient episodes into stable, long-term wisdom. It resolves contradictions (e.g., "My dog is 3" vs "My dog turned 4") and merges redundancies.
+
+3. **Reconstructive Recollection (Retrieval)** — When the agent needs context, it doesn't just keyword-search. It identifies which MemScene is relevant, traverses connections to find specific MemCells, and reconstructs the exact context needed — filtering noise and prioritizing relevance.
+
+### MemCell
+
+The atomic unit of memory. A structured tuple: M = (Episode, Atomic Facts, Foresight, Metadata).
+
+- **Episode (E)**: Narrative summary of what happened — captures flow, user intent, and causal logic.
+- **Atomic Facts (A)**: Discrete, verifiable statements (e.g., "User likes spicy food", "Budget approval needed by Friday").
+- **Foresight (F)**: Forward-looking inferences with validity intervals (e.g., "User will be in Paris" valid from tomorrow to next week).
+- **Metadata (T)**: Timestamps, source, confidence, emotional valence.
+
+Example MemCell structure:
+
+```json
+{
+  "memcell_id": "mc_123456789",
+  "episode": "The user discussed plans for the Q3 marketing campaign, emphasizing social media channels.",
+  "atomic_facts": [
+    "User role is Marketing Manager",
+    "Q3 campaign focus is Social Media",
+    "Budget approval needed by Friday"
+  ],
+  "foresight": {
+    "prediction": "User will submit budget proposal",
+    "valid_after": "2025-10-10T09:00:00Z",
+    "valid_until": "2025-10-13T17:00:00Z"
+  },
+  "metadata": {
+    "created_at": "2025-10-09T14:30:00Z",
+    "source": "slack_integration"
+  }
+}
+```
+
+MemCells are created automatically through: segmentation (boundary detection) -> extraction (LLM parses narrative + facts) -> inference (future implications) -> packaging (unique ID assigned).
+
+### MemScene
+
+A thematic cluster of related MemCells representing a specific context (e.g., "Python Project X", "Job Interview Prep", "Personal Hobbies"). MemScenes are created and maintained through Semantic Consolidation, which runs asynchronously.
+
+The consolidation process:
+1. **Clustering** — New MemCells are matched to existing MemScenes by semantic embedding, or a new cluster is created for novel topics.
+2. **Synthesis** — Within a MemScene, redundancies are merged and contradictions resolved.
+3. **User Persona Update** — Key traits are promoted to the global User Profile.
+
+MemScenes solve the context window problem by providing pre-digested, structured views of topics. Instead of reading 500 pages of chat logs, the agent reads the synthesized MemScene.
+
+### Memory Types
+
+| Type | API value | Description | Supported scenes |
+|------|-----------|-------------|-----------------|
+| Episode | `episodic_memory` | Narrative summaries of conversations capturing flow and decisions | All |
+| Profile | `profile` | Persistent user attributes, preferences, and traits | All |
+| Foresight | `foresight` | Time-bounded prospective memories (reminders, deadlines) | Assistant only |
+| EventLog | `eventlog` | Atomic factual event records with timestamps | Assistant only |
+| Agent Case | `agent_case` | Task intent, step-by-step approach, and quality score from agent trajectories | All |
+| Agent Skill | `agent_skill` | Generalized skills distilled from multiple agent cases | All |
+
+Mental model for choosing:
+- "Who am I?" -> Profile
+- "What happened last week?" -> Episode
+- "What was the exact file name?" -> EventLog
+- "What's next?" -> Foresight
+
+### Scenario Modes
+
+When creating a Memory Space, choose one of two modes. This is **immutable once data is stored**.
+
+**Personal AI Assistant / Companion** (`assistant`):
+- 1 human user talking with 1 or more AIs
+- Extracts all four memory types (episode, profile, foresight, eventlog)
+- Human-centric: extraction focuses on the human user's preferences, facts, and evolving states
+- AI responses are kept for atomic facts but no AI profile is built
+
+**Team Collaboration** (`group_chat`):
+- Multi-participant group chats (with or without AI)
+- Extracts episode + profile only (no foresight, no eventlog)
+- Builds a group profile (recurring topics, decision makers, norms) and per-participant profiles (role, action items)
+- Granular attribution: each participant's contributions tracked separately, never merged
+
+### Reconstructive Recollection
+
+Traditional search is passive (query -> matching documents). Reconstructive Recollection is active: the agent analyzes current intent and rebuilds the necessary context.
+
+The process:
+1. **Intent Analysis** — Determines what the user wants (task, topic, time constraints).
+2. **Scene Activation** — Loads the relevant MemScene.
+3. **Context Synthesis** — Pulls specific facts, decisions, and action items while ignoring irrelevant content (small talk, off-topic).
+
+This is adaptive:
+- **Factual queries** ("What is my API key?") -> precise Atomic Facts lookup
+- **Creative tasks** ("Brainstorm ideas") -> broader episodic narratives
+- **Reasoning tasks** ("Why did we switch databases?") -> causal chain across multiple MemCells
+
+---
+
+## API Reference (v1)
+
+Base URL: `https://api.evermind.ai`
+All endpoints use JSON. The v0 API is deprecated — use v1 only.
+
+### Authentication
+
+```
+Authorization: Bearer <api_key>
+```
+
+Obtain keys from https://everos.evermind.ai/api-keys. Never commit keys to version control.
+
+### Add Personal Memories
+
+`POST /api/v1/memories`
+
+Adds messages for a single user. Messages are queued for async processing by default.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_id` | string | yes | Owner user ID |
+| `session_id` | string | no | Session identifier |
+| `messages` | array | yes | 1-500 message items |
+| `async_mode` | boolean | no | Default true. False for synchronous processing |
+
+**Message item:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `role` | string | yes | "user" or "assistant" |
+| `timestamp` | integer | yes | Unix milliseconds |
+| `content` | string or array | yes | Text string, or array of ContentItems for multimodal |
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()
+memories = client.v1.memories
+
+response = memories.add(
+    user_id="user_001",
+    session_id="session_001",
+    messages=[
+        {"role": "user", "timestamp": int(time.time() * 1000), "content": "I prefer morning meetings before 10am."},
+    ],
+)
+print(f"status={response.data.status}  task_id={response.data.task_id}")
+```
+
+Response (async mode, 202):
+```json
+{"data": {"task_id": "abc123", "status": "queued", "message_count": 1, "message": "Message accepted and queued for processing"}}
+```
+
+Response (sync mode, 200):
+```json
+{"data": {"task_id": "", "status": "accumulated", "message_count": 1, "message": "Messages accepted"}}
+```
+
+### Add Group Memories
+
+`POST /api/v1/memories/group`
+
+Adds messages for a multi-participant group. Each message must include `sender_id`.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `group_id` | string | yes | Group identifier |
+| `group_meta` | object | no | Group metadata |
+| `messages` | array | yes | 1-500 group message items |
+| `async_mode` | boolean | no | Default true |
+
+**Group message item** (extends message item):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `sender_id` | string | yes | Sender identifier |
+| `sender_name` | string | no | Display name |
+| `message_id` | string | no | Unique message ID |
+
+```python
+group_mem = client.v1.memories.group
+
+group_mem.add(
+    group_id="team_standup",
+    messages=[
+        {"role": "user", "sender_id": "alice", "sender_name": "Alice", "timestamp": 1711900000000, "content": "Let's discuss the sprint."},
+        {"role": "user", "sender_id": "bob", "sender_name": "Bob", "timestamp": 1711900060000, "content": "I finished the API refactor."},
+    ],
+)
+```
+
+### Add Agent Memories
+
+`POST /api/v1/memories/agent`
+
+Adds agent trajectory messages. Supports roles: "user", "assistant", "tool".
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_id` | string | yes | Owner user ID |
+| `session_id` | string | no | Session identifier |
+| `messages` | array | yes | 1-500 agent message items |
+| `async_mode` | boolean | no | Default true |
+
+**Agent message item:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `role` | string | yes | "user", "assistant", or "tool" |
+| `timestamp` | integer | yes | Unix milliseconds |
+| `content` | string/array/null | conditional | Content (not required for assistant with tool_calls) |
+| `tool_calls` | array | no | Tool calls made by assistant (OpenAI format) |
+| `tool_call_id` | string | conditional | Required when role is "tool" |
+
+```python
+agent = client.v1.memories.agent
+
+agent.add(
+    user_id="user_001",
+    session_id="coding_session_001",
+    messages=[
+        {"role": "user", "timestamp": 1711900000000, "content": "Find all Python files with TODO comments"},
+        {"role": "assistant", "timestamp": 1711900001000, "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "grep", "arguments": "{\"pattern\": \"TODO\", \"glob\": \"**/*.py\"}"}}
+        ]},
+        {"role": "tool", "timestamp": 1711900002000, "tool_call_id": "call_1", "content": "Found 3 files with TODO comments..."},
+        {"role": "assistant", "timestamp": 1711900003000, "content": "I found 3 Python files with TODO comments."},
+    ],
+)
+```
+
+### Flush Memories
+
+Triggers boundary detection on accumulated messages. If a boundary is detected, memory extraction runs immediately.
+
+| Endpoint | Required params |
+|----------|----------------|
+| `POST /api/v1/memories/flush` | `user_id`, optional `session_id` |
+| `POST /api/v1/memories/group/flush` | `group_id` |
+| `POST /api/v1/memories/agent/flush` | `user_id`, optional `session_id` |
+
+```python
+memories.flush(user_id="user_001", session_id="session_001")
+```
+
+Response:
+```json
+{"data": {"status": "extracted", "message": "Flush completed"}}
+```
+
+Status values: `"extracted"` (extraction triggered) or `"no_extraction"` (no boundary detected).
+
+### Get Memories
+
+`POST /api/v1/memories/get`
+
+Retrieves structured memories with filters and pagination.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `memory_type` | string | yes | `episodic_memory`, `profile`, `agent_case`, or `agent_skill` |
+| `filters` | object | yes | Must contain `user_id` or `group_id` (see Filters DSL) |
+| `page` | integer | no | Page number, starts at 1 (default 1) |
+| `page_size` | integer | no | Items per page, 1-100 (default 20) |
+| `rank_by` | string | no | Sort field (default "timestamp") |
+| `rank_order` | string | no | "asc" or "desc" (default "desc") |
+
+```python
+response = memories.get(
+    filters={"user_id": "user_001"},
+    memory_type="episodic_memory",
+    page=1,
+    page_size=10,
+)
+
+episodes = response.data.episodes  # list of EpisodeItem
+total = response.data.total_count
+```
+
+**Response fields by memory_type:**
+
+`episodic_memory` returns `episodes[]` with: `id`, `user_id`, `group_id`, `session_id`, `timestamp`, `participants`, `sender_ids`, `summary`, `subject`, `episode`, `type`, `parent_type`, `parent_id`.
+
+`profile` returns `profiles[]` with: `id`, `user_id`, `group_id`, `profile_data` (contains `explicit_info` and `implicit_traits`), `scenario`, `memcell_count`.
+
+`agent_case` returns `agent_cases[]` with: `id`, `user_id`, `session_id`, `task_intent`, `approach`, `quality_score` (0.0-1.0), `timestamp`.
+
+`agent_skill` returns `agent_skills[]` with: `id`, `user_id`, `cluster_id`, `name`, `description`, `content`, `confidence` (0.0-1.0), `maturity_score` (0.0-1.0), `source_case_ids[]`.
+
+All responses include `total_count` and `count`.
+
+### Search Memories
+
+`POST /api/v1/memories/search`
+
+Searches memories using semantic, keyword, or hybrid retrieval.
+
+**Recommended defaults:** `method="hybrid"`, `top_k=5` for chat contexts or `top_k=10` for research/analysis. Always include `user_id` in filters unless querying group-level data.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | yes | Search query text |
+| `filters` | object | yes | Always include `user_id` or `group_id` |
+| `method` | string | no | `keyword`, `vector`, `hybrid` (default, recommended), or `agentic` |
+| `memory_types` | array | no | Default `["episodic_memory", "profile"]`. Options: `episodic_memory`, `profile`, `raw_message`, `agent_memory` |
+| `top_k` | integer | no | Max results, -1 for all up to 100 (default -1). Recommended: 5-10 |
+| `radius` | float | no | Cosine similarity threshold 0.0-1.0 for vector methods |
+| `include_original_data` | boolean | no | Return original data (default false) |
+
+```python
+response = memories.search(
+    filters={"user_id": "user_001"},
+    query="coffee preference",
+    method="hybrid",
+    memory_types=["episodic_memory", "profile"],
+    top_k=10,
+)
+```
+
+### Delete Memories
+
+`POST /api/v1/memories/delete`
+
+Two mutually exclusive modes:
+
+**Single delete** — provide `memory_id` only:
+```json
+{"memory_id": "67c8a1b2f3e4d5c6a7b8c9d0"}
+```
+
+**Batch delete** — provide at least one of `user_id` or `group_id`:
+```json
+{"user_id": "user_001", "session_id": "session_001"}
+```
+
+Filter values use three-state logic: `"__all__"` (skip/ignore), `null` or `""` (match empty), or a string value (exact match). Default for all filters is `"__all__"`.
+
+### Groups
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/groups` | Create group (upsert). Required: `group_id`. Optional: `name`, `description` |
+| `GET /api/v1/groups/{group_id}` | Get group details |
+| `PATCH /api/v1/groups/{group_id}` | Update group. At least one of `name` or `description` required |
+
+```python
+groups = client.v1.groups
+groups.create(group_id="team_eng", name="Engineering", description="Engineering team channel")
+```
+
+### Senders
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/senders` | Create sender (upsert). Required: `sender_id`. Optional: `name`, `role`, `metadata` |
+| `GET /api/v1/senders/{sender_id}` | Get sender details |
+| `PATCH /api/v1/senders/{sender_id}` | Update sender display name |
+
+```python
+senders = client.v1.senders
+senders.create(sender_id="user_alice", name="Alice")
+```
+
+### Tasks
+
+`GET /api/v1/tasks/{task_id}`
+
+Check async task status. Task status stored in Redis with 1-hour TTL.
+
+Response:
+```json
+{"data": {"task_id": "abc123", "status": "success"}}
+```
+
+Status values: `"processing"`, `"success"`, `"failed"`.
+
+### Storage (Multimodal Upload)
+
+`POST /api/v1/object/sign`
+
+Generate pre-signed S3 upload URLs. Upload signature valid for 15 minutes, download valid for 7 days.
+
+```json
+{
+  "objectList": [
+    {"fileId": "img_001", "fileName": "whiteboard.png", "fileType": "image"},
+    {"fileId": "doc_001", "fileName": "report.pdf", "fileType": "file"},
+    {"fileId": "vid_001", "fileName": "recording.mp4", "fileType": "video"}
+  ]
+}
+```
+
+Response returns `objectKey` and `objectSignedInfo` (url + fields) for each file. Upload flow:
+1. Call `/api/v1/object/sign` to get pre-signed URL and `objectKey`
+2. POST the file to the S3 URL with the returned fields (returns 204)
+3. Use `objectKey` as `uri` in message content array
+
+### Settings
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/v1/settings` | Get current memory space settings |
+| `PUT /api/v1/settings` | Update settings (LLM providers, extraction behavior). Only provided fields are updated |
+
+### Filters DSL
+
+Used in get and search endpoints. **Always include `user_id`** unless you're querying group-level data (then use `group_id`). Omitting both will return a 422 error.
+
+**Supported fields and operators:**
+
+| Field | Operators | Notes |
+|-------|-----------|-------|
+| `user_id` | eq, in | Top-level, conditionally required |
+| `group_id` | eq, in | Top-level, conditionally required |
+| `session_id` | eq, in, gt, gte, lt, lte | Inside AND/OR combinators |
+| `timestamp` | eq, gt, gte, lt, lte | Accepts epoch ms/s or ISO string |
+
+**Operator syntax:** Plain value = eq. Object for other operators.
+
+Examples:
+```json
+// Simple user filter
+{"user_id": "user_001"}
+
+// User with time range
+{"user_id": "user_001", "AND": [{"timestamp": {"gte": 1700000000000, "lt": 1710000000000}}]}
+
+// Multiple sessions
+{"user_id": "user_001", "AND": [{"session_id": {"in": ["s1", "s2"]}}]}
+
+// OR combinator
+{"user_id": "user_001", "OR": [{"session_id": "s1"}, {"session_id": "s2"}]}
+```
+
+### Error Handling
+
+Errors return:
+```json
+{"code": "InvalidParameter", "message": "user_id: Field required", "request_id": "unknown", "timestamp": "2026-03-24T00:00:00+00:00", "path": "/api/v1/memories"}
+```
+
+| HTTP Status | Meaning |
+|-------------|---------|
+| 400 | Syntax error (malformed JSON, missing required fields, body too large) |
+| 422 | Validation error (invalid values, business rule violations) |
+| 500 | Internal server error |
+
+Error codes: `InvalidParameter`, `NotFound`, `InternalError`.
+
+---
+
+## Retrieval Methods
+
+### Keyword (BM25)
+
+Fast lexical search. <100ms latency. Best for exact terms, known phrases, product names, IDs.
+
+```python
+memories.search(filters={"user_id": "u1"}, query="Project Phoenix", method="keyword", top_k=10)
+```
+
+### Vector (Semantic)
+
+Embedding-based search. 200-500ms. Finds conceptually similar content even with different wording.
+
+```python
+memories.search(filters={"user_id": "u1"}, query="what are the user's hobbies", method="vector", top_k=10)
+```
+
+### Hybrid / RRF (Recommended Default)
+
+Combines keyword + vector using Reciprocal Rank Fusion, then reranks. 200-600ms. Best balance of precision and recall.
+
+```python
+memories.search(filters={"user_id": "u1"}, query="morning routine and work preferences", method="hybrid", top_k=10)
+```
+
+### Agentic (LLM-Guided)
+
+Uses an LLM to decompose complex queries into sub-queries, execute each via hybrid search, and aggregate results. 2-5s latency, 1-3 LLM calls, 3-5 search operations.
+
+```python
+memories.search(
+    filters={"user_id": "u1"},
+    query="What context would help me prepare for discussing the product roadmap with stakeholders?",
+    method="agentic",
+    memory_types=["episodic_memory", "profile"],
+    top_k=15,
+)
+```
+
+**Decision rule — use `agentic` ONLY if:**
+- The query is complex or multi-step AND
+- `hybrid` results are insufficient for the task
+
+**Always fallback to `hybrid` on timeout or error.** Do not default to agentic — it costs 3-5x more and is 10x slower.
+
+**Best practices for agentic:**
+- Set longer timeouts (60s) — default HTTP timeouts will fail
+- Implement hybrid fallback: try agentic, catch timeout, retry with hybrid
+- Write detailed queries explaining what context you need (not just keywords)
+- Filter `memory_types` to only what's needed to reduce search space
+- Use `group_id` in filters to narrow scope when possible
+
+### Choosing a Retrieval Method
+
+| Scenario | Method |
+|----------|--------|
+| Real-time autocomplete | `keyword` |
+| Chatbot memory retrieval | `hybrid` |
+| Specific terms/IDs | `keyword` |
+| "Tell me everything about X" | `agentic` |
+| Semantic similarity | `vector` |
+| Default / unsure | `hybrid` |
+
+Decision flowchart:
+```
+Latency critical (<100ms)? -> keyword
+Complex multi-part query? -> agentic
+Otherwise -> hybrid
+```
+
+---
+
+## Multimodal Memory
+
+Messages can include multimodal content by using an array of ContentItems instead of a plain string.
+
+**Supported types:**
+
+| Type | Formats | Max size |
+|------|---------|----------|
+| `image` | JPG, PNG, GIF, WebP | 10 MB |
+| `doc` | DOC, TXT | 100 MB |
+| `pdf` | PDF | 100 MB |
+| `html` | HTML | 100 MB |
+| `email` | Email | 100 MB |
+| `audio` | MP3, WAV | 500 MB |
+| video | MP4, WebM | 500 MB |
+
+**ContentItem fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Required. One of: text, image, audio, doc, pdf, html, email |
+| `text` | string | Content body (for type: text) |
+| `uri` | string | objectKey from upload flow |
+| `name` | string | File name |
+| `ext` | string | File extension (png, mp3, pdf) |
+| `source` | string | Content source (google_doc, notion, confluence, zoom) |
+| `source_info` | object | Source-related traceability metadata |
+| `extras` | object | Type-specific extra fields |
+
+**Limits:** 10 non-text items per message, 300KB request body (files stored on S3).
+
+**Upload via API (3 steps):**
+
+```bash
+# 1. Get pre-signed URL
+curl -X POST https://api.evermind.ai/api/v1/object/sign \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{"objectList": [{"fileId": "img_001", "fileName": "whiteboard.png", "fileType": "image"}]}'
+
+# Response includes objectKey and objectSignedInfo with url + fields
+
+# 2. Upload file to S3 using returned fields (returns 204)
+
+# 3. Use objectKey in message content
+curl -X POST https://api.evermind.ai/api/v1/memories \
+  -H "Authorization: Bearer <api_key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user_001",
+    "messages": [{
+      "role": "user", "timestamp": 1711900000000,
+      "content": [
+        {"type": "text", "text": "Here is the meeting whiteboard"},
+        {"type": "image", "uri": "<objectKey>", "name": "whiteboard.png", "ext": "png"}
+      ]
+    }]
+  }'
+```
+
+**Upload via Python SDK (single step):**
+
+The SDK auto-handles signing, uploading, and memory creation. Pass local paths or HTTP URLs directly:
+
+```python
+import time
+from everos import EverOS
+
+client = EverOS()
+memories = client.v1.memories
+now_ms = int(time.time() * 1000)
+
+response = memories.add(
+    user_id="user_001",
+    messages=[{
+        "role": "user",
+        "timestamp": now_ms,
+        "content": [
+            {"type": "text", "text": "Meeting whiteboard photo"},
+            {"type": "image", "uri": "./whiteboard.jpg", "name": "whiteboard.jpg", "ext": "jpg"},
+        ],
+    }],
+)
+```
+
+Works with all add endpoints: `/api/v1/memories`, `/api/v1/memories/group`, `/api/v1/memories/agent`.
+
+---
+
+## Foresight Memory
+
+Time-bounded prospective memories. Only available in **assistant** scenario mode.
+
+When conversations mention future events, EverOS extracts foresight memories with `start_time` and `end_time` validity windows:
+
+```
+User: "Remind me to call John next Tuesday at 2pm"
+-> Foresight: "Call John" (start: Tue 2pm, end: Tue 3pm)
+
+User: "Submit report by Friday"
+-> Foresight: "Submit report" (start: now, end: Fri 11:59pm)
+```
+
+**Searching foresight memories:** Include `current_time` to filter by validity window:
+
+```python
+from datetime import datetime
+
+response = memories.search(
+    filters={"user_id": "user_001"},
+    query="reminders appointments deadlines",
+    method="hybrid",
+    memory_types=["foresight"],
+    top_k=10,
+    current_time=datetime.now().isoformat() + "Z",
+)
+```
+
+Foresight enables proactive behavior: contextual reminders, conflict detection, deadline tracking, and time-aware responses.
+
+---
+
+## Python SDK
+
+### Installation
+
+```bash
+pip install everos
+```
+
+Set your API key via environment variable or constructor:
+```bash
+export EVEROS_API_KEY="your_api_key"
+```
+
+### Sync Client
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()  # uses EVEROS_API_KEY env var
+# or: client = EverOS(api_key="your_api_key")
+memories = client.v1.memories
+
+# Add
+memories.add(
+    user_id="user_001",
+    messages=[{"role": "user", "timestamp": int(time.time() * 1000), "content": "I prefer morning meetings."}],
+)
+
+# Flush
+memories.flush(user_id="user_001")
+
+# Search (hybrid is the recommended default method, top_k=5 for chat, 10 for analysis)
+results = memories.search(filters={"user_id": "user_001"}, query="meeting preferences", method="hybrid", top_k=5)
+
+# Get
+profile = memories.get(filters={"user_id": "user_001"}, memory_type="profile")
+```
+
+### Async Client
+
+```python
+import asyncio
+import time
+from everos import AsyncEverOS
+
+async def main():
+    client = AsyncEverOS()
+    memories = client.v1.memories
+
+    # Concurrent adds
+    now_ms = int(time.time() * 1000)
+    tasks = [
+        memories.add(user_id="user_001", messages=[{"role": "user", "timestamp": now_ms + i, "content": f"Message {i}"}])
+        for i in range(5)
+    ]
+    await asyncio.gather(*tasks)
+
+    # Search
+    results = await memories.search(filters={"user_id": "user_001"}, query="preferences", method="hybrid", top_k=5)
+
+asyncio.run(main())
+```
+
+### Group Memories via SDK
+
+```python
+groups = client.v1.groups
+senders = client.v1.senders
+group_mem = client.v1.memories.group
+
+# Register group and senders
+groups.create(group_id="team_eng", name="Engineering Team")
+senders.create(sender_id="user_alice", name="Alice")
+senders.create(sender_id="user_bob", name="Bob")
+
+# Add group messages
+group_mem.add(
+    group_id="team_eng",
+    messages=[
+        {"role": "user", "sender_id": "user_alice", "sender_name": "Alice", "timestamp": 1711900000000, "content": "Let's use PostgreSQL for the new service."},
+        {"role": "user", "sender_id": "user_bob", "sender_name": "Bob", "timestamp": 1711900060000, "content": "Agreed. I'll prepare the schema by Friday."},
+    ],
+)
+
+# Flush and search
+group_mem.flush(group_id="team_eng")
+
+# Search group discussions
+results = memories.search(filters={"group_id": "team_eng"}, query="database decision", method="hybrid", top_k=5)
+
+# Search individual perspective
+results = memories.search(filters={"user_id": "user_bob"}, query="database decision", method="hybrid", top_k=5)
+```
+
+### Agent Memories via SDK
+
+```python
+agent = client.v1.memories.agent
+
+agent.add(
+    user_id="agent_001",
+    session_id="task_session_001",
+    messages=[
+        {"role": "user", "timestamp": 1711900000000, "content": "Deploy the staging environment"},
+        {"role": "assistant", "timestamp": 1711900001000, "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "run_deploy", "arguments": "{\"env\": \"staging\"}"}}
+        ]},
+        {"role": "tool", "timestamp": 1711900010000, "tool_call_id": "call_1", "content": "Deployment successful. URL: https://staging.example.com"},
+        {"role": "assistant", "timestamp": 1711900011000, "content": "Staging environment deployed successfully."},
+    ],
+)
+
+agent.flush(user_id="agent_001", session_id="task_session_001")
+
+# Retrieve learned cases and skills
+cases = memories.get(filters={"user_id": "agent_001"}, memory_type="agent_case")
+skills = memories.get(filters={"user_id": "agent_001"}, memory_type="agent_skill")
+```
+
+---
+
+## Cookbook Patterns
+
+### Personal Assistant
+
+Store every conversation turn, retrieve context before generating responses, use context to personalize LLM output.
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()
+memories = client.v1.memories
+
+def chat(user_id: str, user_message: str) -> str:
+    # 1. Retrieve relevant memories
+    context = memories.search(
+        filters={"user_id": user_id},
+        query=user_message,
+        method="hybrid",
+        memory_types=["episodic_memory", "profile"],
+        top_k=5,
+    )
+
+    # 2. Build prompt with memory context
+    memory_text = "\n".join(
+        getattr(ep, "episode", "") or getattr(ep, "summary", "")
+        for ep in (context.data.episodes or [])
+    )
+    prompt = f"User memories:\n{memory_text}\n\nUser: {user_message}"
+
+    # 3. Generate response with your LLM
+    response = call_your_llm(prompt)  # your LLM call here
+
+    # 4. Store the exchange
+    now_ms = int(time.time() * 1000)
+    memories.add(
+        user_id=user_id,
+        messages=[
+            {"role": "user", "timestamp": now_ms, "content": user_message},
+            {"role": "assistant", "timestamp": now_ms + 1000, "content": response},
+        ],
+    )
+
+    return response
+```
+
+### Team Collaboration
+
+Use group memories with sender attribution. EverOS generates both group-level summaries and per-participant episodes.
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()
+groups = client.v1.groups
+senders = client.v1.senders
+group_mem = client.v1.memories.group
+
+# Setup
+groups.create(group_id="team_standup", name="Daily Standup")
+for sid, name in [("alice", "Alice"), ("bob", "Bob"), ("carol", "Carol")]:
+    senders.create(sender_id=sid, name=name)
+
+# Store meeting messages
+now_ms = int(time.time() * 1000)
+group_mem.add(
+    group_id="team_standup",
+    messages=[
+        {"role": "user", "sender_id": "alice", "sender_name": "Alice", "timestamp": now_ms, "content": "I finished the auth module yesterday. Today I'll work on the dashboard."},
+        {"role": "user", "sender_id": "bob", "sender_name": "Bob", "timestamp": now_ms + 30000, "content": "I'm blocked on the API integration. Need Alice's auth endpoints first."},
+        {"role": "user", "sender_id": "carol", "sender_name": "Carol", "timestamp": now_ms + 60000, "content": "Design review is tomorrow at 2pm. Everyone please review the mockups."},
+    ],
+)
+
+group_mem.flush(group_id="team_standup")
+
+# Search: what the team discussed
+team_context = client.v1.memories.search(
+    filters={"group_id": "team_standup"},
+    query="blockers and action items",
+    method="hybrid",
+    top_k=10,
+)
+
+# Search: what Bob specifically needs
+bob_context = client.v1.memories.search(
+    filters={"user_id": "bob"},
+    query="blockers",
+    method="hybrid",
+    top_k=5,
+)
+```
+
+### Customer Support
+
+Per-customer memory with session isolation per ticket. Cross-ticket search for historical context.
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()
+memories = client.v1.memories
+
+class SupportBot:
+    def create_ticket(self, customer_id: str, ticket_id: str, subject: str):
+        session_id = f"ticket_{ticket_id}"
+        memories.add(
+            user_id=customer_id,
+            session_id=session_id,
+            messages=[{"role": "assistant", "timestamp": int(time.time() * 1000), "content": f"Ticket opened: {subject}"}],
+        )
+        return session_id
+
+    def handle_message(self, customer_id: str, session_id: str, message: str) -> str:
+        # Search across ALL customer tickets for relevant history
+        history = memories.search(
+            filters={"user_id": customer_id},
+            query=message,
+            method="hybrid",
+            memory_types=["episodic_memory", "profile"],
+            top_k=10,
+        )
+
+        # Generate response using history context + your LLM
+        response = call_your_llm(message, history)
+
+        # Store the exchange
+        now_ms = int(time.time() * 1000)
+        memories.add(
+            user_id=customer_id,
+            session_id=session_id,
+            messages=[
+                {"role": "user", "timestamp": now_ms, "content": message},
+                {"role": "assistant", "timestamp": now_ms + 1000, "content": response},
+            ],
+        )
+        return response
+```
+
+### AI Tutor
+
+Track student progress across sessions. Use episodic memory for quiz results and profile memory for learning style.
+
+```python
+from everos import EverOS
+import time
+
+client = EverOS()
+memories = client.v1.memories
+
+class AITutor:
+    def __init__(self, subject: str):
+        self.subject = subject
+
+    def record_quiz(self, student_id: str, topic: str, score: int, total: int):
+        pct = (score / total) * 100
+        now_ms = int(time.time() * 1000)
+        memories.add(
+            user_id=student_id,
+            messages=[
+                {"role": "user", "timestamp": now_ms, "content": f"I finished the {topic} quiz."},
+                {"role": "assistant", "timestamp": now_ms + 1000, "content": f"Quiz on {topic}: {score}/{total} ({pct:.0f}%). {'Needs review.' if pct < 80 else 'Well done!'}"},
+            ],
+        )
+
+    def get_knowledge_gaps(self, student_id: str) -> list:
+        resp = memories.search(
+            filters={"user_id": student_id},
+            query="struggled difficult needs review low score",
+            method="vector",
+            memory_types=["episodic_memory"],
+            top_k=20,
+        )
+        return resp.data.episodes if resp.data else []
+
+    def get_learning_context(self, student_id: str, topic: str) -> dict:
+        profile = memories.search(filters={"user_id": student_id}, query=f"learning style {topic}", method="vector", memory_types=["profile"], top_k=5)
+        progress = memories.search(filters={"user_id": student_id}, query=f"{topic} quiz score", method="vector", memory_types=["episodic_memory"], top_k=5)
+        return {"profile": profile.data, "progress": progress.data}
+```
+
+### Batch Processing
+
+Import existing conversation history at scale. Key considerations: 500 messages per request, timestamps in unix milliseconds, use async mode (default).
+
+```python
+from everos import EverOS
+import json
+import time
+
+client = EverOS()
+memories = client.v1.memories
+group_mem = client.v1.memories.group
+
+def batch_import_personal(user_id: str, conversations: list, batch_size: int = 500):
+    """Import personal conversation history."""
+    for i in range(0, len(conversations), batch_size):
+        batch = conversations[i:i + batch_size]
+        response = memories.add(user_id=user_id, messages=batch)
+        print(f"Batch {i // batch_size + 1}: {response.data.status}")
+        time.sleep(1)  # rate limiting
+
+    # Flush to trigger extraction
+    memories.flush(user_id=user_id)
+
+def batch_import_group(group_id: str, messages: list, batch_size: int = 500):
+    """Import group conversation history."""
+    for i in range(0, len(messages), batch_size):
+        batch = messages[i:i + batch_size]
+        response = group_mem.add(group_id=group_id, messages=batch)
+        print(f"Batch {i // batch_size + 1}: {response.data.status}")
+        time.sleep(1)
+
+    group_mem.flush(group_id=group_id)
+```
+
+**Data format for personal:**
+```json
+[
+  {"role": "user", "timestamp": 1705312800000, "content": "Hello, I need help with my project."},
+  {"role": "assistant", "timestamp": 1705312860000, "content": "Sure! What project are you working on?"}
+]
+```
+
+**Data format for group:**
+```json
+[
+  {"role": "user", "sender_id": "alice", "sender_name": "Alice", "timestamp": 1705312800000, "content": "Let's discuss the architecture."},
+  {"role": "user", "sender_id": "bob", "sender_name": "Bob", "timestamp": 1705312890000, "content": "I think we should use microservices."}
+]
+```
+
+---
+
+## Open Source Deployment
+
+EverOS is available as an open-source self-hosted option.
+
+**Repository:** https://github.com/EverMind-AI/EverOS
+
+**Prerequisites:** Python 3.10+, Docker 20.10+ with Docker Compose 2.0+, 4GB RAM minimum.
+
+**Setup:**
+
+```bash
+git clone https://github.com/EverMind-AI/EverOS.git
+cd EverOS
+docker-compose up -d    # starts MongoDB, Elasticsearch, Milvus, Redis
+uv sync                 # or: pip install -r requirements.txt
+cp .env.template .env   # edit to add LLM_api_key and VECTORIZE_api_key
+```
+
+**Infrastructure services:**
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| MongoDB | 27017 | Stores MemCells and user profiles |
+| Elasticsearch | 19200 | Keyword search (BM25) |
+| Milvus | 19530 | Vector database for semantic retrieval |
+| Redis | 6379 | Cache and task status |
+
+**Architecture:** Two main layers:
+- **Memory Construction** — Ingestion -> Boundary Detection -> MemCell Extraction -> Consolidation -> Indexing (keyword + vector)
+- **Memory Perception** — Hybrid Retrieval (BM25 + vector + RRF reranking), Lightweight Fast Mode, Agentic Multi-Round retrieval, Reasoning Fusion with current context
+
+The open-source version has the same core memory pipeline as Cloud. Cloud adds managed infrastructure, auto-scaling, dashboard, and memory visibility.
+
+---
+
+## EverOS vs Standard RAG
+
+| Feature | Standard RAG | EverOS |
+|---------|-------------|--------|
+| Storage | Document chunks | Temporal facts & relationships (MemCells, MemScenes) |
+| Updates | Manual, static, append-only | LLM-driven automatic with conflict resolution |
+| Query | Vector similarity only | BM25, vector, hybrid (RRF), and agentic |
+| Scope | Document-level | User/session-level with attribution |
+| Multi-user | Flat text (profile contamination risk) | Isolated per-participant extraction |
+
+**RAG limitations for long-term interaction:**
+1. **Low signal-to-noise** — Top-k retrieval surfaces similar but useless chat segments (small talk, transitions).
+2. **State conflicts** — Append-only logs accumulate contradictions. The LLM must arbitrate at runtime.
+3. **Multi-user attribution failure** — Flat text sequence causes misattribution between speakers.
+
+**Use EverOS for:** AI companions, personalized assistants, multi-user group chats, educational/coaching agents, gaming NPCs — anything requiring long-term consistency and user understanding.
+
+**Use RAG for:** Static document QA, "chat with PDF", FAQ bots, code search — scenarios where the source document is the ground truth.
+
+---
+
+## Benchmarks
+
+- **LoCoMo**: 93.05% overall accuracy (with GPT-4.1-mini), vs Zep 85.22%. Multi-hop: 91.84%, Temporal: 89.72%.
+- **LongMemEval**: 83.00% overall, vs MemOS 77.80%.
+- **PersonaMem v2**: Profile consolidation improved accuracy by 9%+.
+
+## Quota
+
+Subscription plans based on MemCell count. Average ratio: ~10 raw messages produce 1 MemCell (varies by semantic boundary detection).
+
+## FAQ
+
+**What problem does EverOS solve?**
+LLMs hit a "cognitive wall" — limited context windows can't hold months of history, and standard retrieval pulls isolated snippets without integration or conflict handling. EverOS provides structured memory organization.
+
+**How does it differ from Mem0, Zep, MemOS?**
+EverOS implements a complete biological memory lifecycle (Formation -> Consolidation -> Recollection) rather than flat storage + fragment retrieval. It actively transforms dialogues into structured knowledge and dynamic profiles.
+
+**What scenarios is it best for?**
+Long-term AI companions, personalized health/lifestyle management, professional collaboration, educational agents — any application requiring consistency across time and deep user understanding.
+
+**How does it handle temporal reasoning?**
+Foresight memories have validity intervals. Prospection Filtering during retrieval retains only currently valid information, enabling precise temporal reasoning.
+
+## SDK Migration (v0 to v1)
+
+The `everos-sdk-upgrade` plugin automates migration from Python SDK v0 (`evermemos`) to v1 (`everos`), covering 13 rules: dependency updates, env vars, imports, client init, API signatures, type renames, and exception classes.
+
+```bash
+# Claude Code
+/plugin marketplace add EverMind-AI/everos-plugins
+/plugin install everos-sdk-upgrade@everos-plugins
+/everos-sdk-upgrade
+
+# Other AI tools (Cursor, Copilot, Codex, etc.)
+npx skills add https://github.com/EverMind-AI/everos-plugins
+```
+
+Repository: https://github.com/EverMind-AI/everos-plugins
