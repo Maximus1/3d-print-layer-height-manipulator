@@ -44,6 +44,9 @@ from travel_classifier import TravelClassifier
 from wipe_detector import WipeDetector, WipeCandidate
 from arc_handler import ArcHandler, ArcAnalysis
 from z_duplication_processor import ZDuplicationProcessor, ZDuplicationConfig
+from extrusion_scaling_processor import (
+    ExtrusionScalingProcessor, ExtrusionScalingConfig
+)
 from sublayer_processor import SublayerProcessor, SublayerConfig
 from output_writer import OutputWriter, make_output_path
 from logging_system import (
@@ -68,11 +71,13 @@ class PipelineConfig:
         'run_wipe_detection',
         'run_arc_analysis',
         'run_z_duplication',
+        'run_extrusion_scaling',
         'run_sublayer_processing',
         'run_validation_after',
         'run_divergence_check',
         'abort_on_validation_error',
         'z_duplication_config',
+        'extrusion_scaling_config',
         'sublayer_config',
     )
 
@@ -84,11 +89,13 @@ class PipelineConfig:
         self.run_wipe_detection: bool = True
         self.run_arc_analysis: bool = True
         self.run_z_duplication: bool = False  # Phase 13.6 – standardmäßig deaktiviert
+        self.run_extrusion_scaling: bool = False  # Phase 13.7 – standardmäßig deaktiviert
         self.run_sublayer_processing: bool = True
         self.run_validation_after: bool = True
         self.run_divergence_check: bool = True
         self.abort_on_validation_error: bool = True
         self.z_duplication_config: ZDuplicationConfig = ZDuplicationConfig()
+        self.extrusion_scaling_config: ExtrusionScalingConfig = ExtrusionScalingConfig()
         self.sublayer_config: SublayerConfig = SublayerConfig()
 
         # Override mit kwargs
@@ -347,6 +354,45 @@ class Pipeline:
                          geometry={
                              'duplications': z_duplications,
                              'stats': z_processor.get_stats(),
+                         })
+
+        # =================================================================
+        # SCHRITT 6.6: EXTRUSION SCALING (Phase 13.7)
+        # =================================================================
+        if self.config.run_extrusion_scaling:
+            self.log.info('stage_start',
+                         decision='extrusion_scaling',
+                         reason='step 6.6/10')
+
+            es_processor = ExtrusionScalingProcessor(
+                self.config.extrusion_scaling_config)
+
+            # M82/M83-State aus Events tracken
+            relative_e = True  # Default: relativ
+            e_scaled = 0
+
+            for event in events:
+                # M82/M83 tracken
+                if event.command == 'M82':
+                    relative_e = False
+                elif event.command == 'M83':
+                    relative_e = True
+
+                # Nur GCode-Befehle verarbeiten
+                if event.command in ('G0', 'G1', 'G2', 'G3'):
+                    new_line = es_processor.process_event(
+                        event, relative_e)
+
+                    if new_line != event.raw:
+                        modified_lines[event.line_idx] = new_line
+                        e_scaled += 1
+
+            self.log.info('stage_complete',
+                         decision='extrusion_scaling_complete',
+                         reason=f'{e_scaled} events scaled',
+                         geometry={
+                             'e_scaled': e_scaled,
+                             'stats': es_processor.get_stats(),
                          })
 
         # =================================================================

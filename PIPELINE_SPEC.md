@@ -77,10 +77,14 @@ Jeder Schritt muss:
 - Integrationstest: `test_z_duplication_integration.py`
 - Status: Validiert (29.05.2026)
 
-### Phase 13.7 (Extrusion Scaling):
+### Phase 13.7 (Extrusion Scaling): ✅ ABGESCHLOSSEN
 - E-Werte mathematisch skalieren (M82/M83 korrekt)
 - Keine Änderung an X/Y/Z
 - Keine Änderung an G2/G3 I/J
+- Implementiert in: `extrusion_scaling_processor.py`
+- Integration: `pipeline.py` (Schritt 6.6)
+- Tests: `tests/test_extrusion_scaling.py` (22 Tests)
+- Status: Validiert (29.05.2026)
 
 ### Phase 13.8 (Sublayer-Insertion):
 - 1 zusätzliche Zwischenlage (keine beliebige Anzahl)
