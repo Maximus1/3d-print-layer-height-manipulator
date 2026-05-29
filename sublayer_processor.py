@@ -72,6 +72,7 @@ class SublayerProcessor:
         self.config = config or SublayerConfig()
         self.log = get_logger('sublayer_processor')
         self._current_e: float = 0.0  # Für absolute E-Skalierung
+        self._global_e: float = 0.0   # Über Konturen hinweg
         self._stats = {
             'contours_processed': 0,
             'events_generated': 0,
@@ -100,11 +101,23 @@ class SublayerProcessor:
                          reason=f'type {contour.type_tag} not in target_types')
             return events
 
+        # Aktuellen E-Wert: Aus dem State-Snapshot übernehmen
+        # oder aus Events berechnen
+        if not state_snapshot.get('modes', {}).get('relative_e', False):
+            # State-Snapshot enthält den aktuellen E-Wert
+            self._current_e = state_snapshot.get('current_e', self._global_e)
+            # Prüfe ob Events einen G92 Reset haben
+            for prev_event in events:
+                if prev_event.command in ('G92',) and 'E' in prev_event.params:
+                    self._current_e = prev_event.params['E']
+            self._global_e = self._current_e
+
         self.log.info('contour_processing_start',
                      line_number=contour.start_line_idx or 0,
                      command=f'contour {contour.contour_id}',
                      decision='processing',
-                     reason=f'type={contour.type_tag}, events={len(events)}',
+                     reason=f'type={contour.type_tag}, events={len(events)}, '
+                            f'start_e={self._current_e:.3f}',
                      geometry={
                          'distance_mm': contour.total_distance,
                          'extrusion_mm': contour.total_extrusion,
@@ -112,6 +125,10 @@ class SublayerProcessor:
                      state_snapshot=state_snapshot)
 
         result = self._split_contour(contour, events, state_snapshot)
+
+        # Globalen E-Wert nach Kontur aktualisieren
+        if not state_snapshot.get('modes', {}).get('relative_e', False):
+            self._global_e = self._current_e
 
         self._stats['contours_processed'] += 1
         self._stats['events_generated'] += len(result) - len(events)
@@ -186,19 +203,17 @@ class SublayerProcessor:
             modified = self._replace_param(modified, 'Z', new_z)
 
         # E-Wert skalieren
+        # ACHTUNG: Im absoluten Modus (M82) ist E-Skalierung NICHT möglich,
+        # weil absolute E-Werte aufsteigend sein müssen und Skalierung
+        # nicht-aufsteigende Werte erzeugt.
+        # Nur im relativen Modus (M83) ist E-Skalierung sicher.
         if event.has_e and self.config.scale_extrusion:
             e_value = event.params['E']
             if state_snapshot.get('modes', {}).get('relative_e', False):
                 # Relativer Modus: E-Wert direkt skalieren
                 scaled_e = e_value * scale
-            else:
-                # Absoluter Modus: Delta berechnen und skalieren
-                delta = e_value - self._current_e
-                scaled_delta = delta * scale
-                scaled_e = self._current_e + scaled_delta
-                # Aktuellen E-Wert aktualisieren
-                self._current_e = scaled_e
-            modified = self._replace_param(modified, 'E', scaled_e)
+                modified = self._replace_param(modified, 'E', scaled_e)
+            # Im absoluten Modus: E-Wert NICHT ändern
 
         return modified + comment + '\n'
 

@@ -403,7 +403,17 @@ class Pipeline:
                          decision='processing_sublayers',
                          reason='step 7/10')
 
+            from state_tracker import GCodeState
             processor = SublayerProcessor(self.config.sublayer_config)
+
+            # State-Tracker für gesamten GCode laufen lassen
+            # (um korrekten current_e für jede Kontur zu bestimmen)
+            global_state = GCodeState()
+            global_e_tracker = {}  # line_idx -> current_e
+
+            for event in events:
+                global_state.process_event(event)
+                global_e_tracker[event.line_idx] = global_state.current_e
 
             for contour in self.result.contours:
                 contour_events = [events[i] for i in range(
@@ -411,8 +421,22 @@ class Pipeline:
                     (contour.end_line_idx or 0) + 1
                 ) if i < len(events)]
 
-                # State-Snapshot für diesen Zeitpunkt
-                state_snapshot = {'modes': {'relative_e': False}}
+                # State-Snapshot mit korrektem current_e
+                start_idx = contour.start_line_idx or 0
+                current_e = global_e_tracker.get(start_idx, 0.0)
+
+                # M82/M83-State aus Events bestimmen
+                relative_e = True
+                for ce in contour_events:
+                    if ce.command == 'M82':
+                        relative_e = False
+                    elif ce.command == 'M83':
+                        relative_e = True
+
+                state_snapshot = {
+                    'modes': {'relative_e': relative_e},
+                    'current_e': current_e,
+                }
 
                 # Kontur verarbeiten
                 new_lines = processor.process_contour(
